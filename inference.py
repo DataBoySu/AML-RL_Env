@@ -76,7 +76,7 @@ def get_model_message(client: OpenAI, obs_dict: dict, history: List[str]) -> str
         return '{"action": {"action_type": "submit_decision", "decision": "CLEAR", "evidence_links": []}}'
 
 async def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
     
     # Initialize your environment natively for the baseline script
     env = AmlEnvironment()
