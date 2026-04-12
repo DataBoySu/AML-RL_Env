@@ -1,9 +1,6 @@
-# Core OpenEnv runtime
-openenv[core]>=0.2.0
-
-# FastAPI server stack
 fastapi>=0.115.0
-uvicorn[standard]>=0.29.0
-
-# Data validation (OpenEnv models are Pydantic-based)
-pydantic>=2.7.0
+uvicorn[standard]==0.30.1
+pydantic>=2.0.0
+websockets==12.0
+openai>=1.30.0
+gradio
