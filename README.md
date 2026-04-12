@@ -11,7 +11,7 @@ tags:
 
 <div align="center">
 
-# 🕵️ AML Investigator OpenEnv RL Environment
+# 🕵️ AML Investigator — OpenEnv RL Environment
 
 **A financial crime investigation environment for training and evaluating LLM agents**
 
@@ -81,11 +81,11 @@ Every investigation runs as a sequence of steps between agent and environment. T
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent
-    participant E as Environment
-    participant D as Data Layer
+    participant A as 🤖 Agent
+    participant E as ⚙️ Environment
+    participant D as 🗄️ Data Layer
 
-    E-->>A: reset() -> AmlObservation<br/>(alert_details, budget=N)
+    E-->>A: reset() → AmlObservation<br/>(alert_details, budget=N)
 
     loop Until submit_decision or budget=0
         A->>E: step(AmlAction)
@@ -96,7 +96,7 @@ sequenceDiagram
 
     A->>E: step(submit_decision, evidence=[...])
     E->>E: Run Grader
-    E-->>A: AmlObservation<br/>(done=True, reward=0.0-1.0)
+    E-->>A: AmlObservation<br/>(done=True, reward=0.0–1.0)
 ```
 
 ---
@@ -112,7 +112,7 @@ The agent communicates exclusively through **typed Pydantic actions**. No regex 
 | `get_kyc_record` | `entity_id` | Retrieve address, entity type, and corporate directors. |
 | `submit_decision` | `decision: FRAUD\|CLEAR`, `evidence_links: List[str]` | Terminal action. Ends the episode and triggers the grader. |
 
-> **Why Pydantic?** The LLM is the router. Strict schemas with `Field(description="...")` mean the model reads the tool contract, not a prompt full of prose instructions. Malformed output is caught at validation, not execution, preventing silent failures and hallucinated account IDs from crashing the environment.
+> **Why Pydantic?** The LLM is the router. Strict schemas with `Field(description="...")` mean the model reads the tool contract, not a prompt full of prose instructions. Malformed output is caught at validation, not execution — preventing silent failures and hallucinated account IDs from crashing the environment.
 
 ---
 
@@ -147,7 +147,7 @@ The trap is the jurisdiction flag. A naive model panics and submits `FRAUD`. A w
 
 ```mermaid
 flowchart LR
-    A([Alert:<br/>ACC-101 to ACC-909<br/>$50,000]) --> B
+    A([🚨 Alert:<br/>ACC-101 → ACC-909<br/>$50,000]) --> B
 
     subgraph Investigation
         B[query_transactions<br/>ACC-101] --> C{Memo:<br/>'Heavy Machinery<br/>Purchase - Unit 4'}
@@ -157,7 +157,7 @@ flowchart LR
         F --> G{50 inbound payments<br/>from global firms}
     end
 
-    G --> H([submit_decision<br/>CLEAR])
+    G --> H([✅ submit_decision<br/>CLEAR])
 
     style A fill:#ef4444,color:#fff
     style H fill:#22c55e,color:#fff
@@ -175,15 +175,15 @@ The agent must paginate through hundreds of normal car-sale transactions to surf
 
 ```mermaid
 flowchart TD
-    A([Alert:<br/>ACC-200 deposit velocity spike]) --> B
+    A([🚨 Alert:<br/>ACC-200 deposit velocity spike]) --> B
 
-    subgraph Investigation["Paginate -> Spot -> Cross-Reference"]
+    subgraph Investigation["Paginate → Spot → Cross-Reference"]
         B[query_transactions<br/>ACC-200<br/>offset 0, 10, 20...] --> C{14 deposits<br/>$9,900 and $9,500<br/>below $10k threshold}
         C --> D[get_kyc_record<br/>ACC-301, ACC-302, ACC-303]
         D --> E{All 3 accounts:<br/>Opened same day<br/>Occupation: Student}
     end
 
-    E --> F([submit_decision<br/>FRAUD<br/>evidence: ACC-301, ACC-302, ACC-303])
+    E --> F([🚨 submit_decision<br/>FRAUD<br/>evidence: ACC-301, ACC-302, ACC-303])
 
     style A fill:#f97316,color:#fff
     style F fill:#dc2626,color:#fff
@@ -203,28 +203,29 @@ This is the full haystack. `ACC-500` has 500+ transactions. `ACC-700` has hundre
 
 ```mermaid
 flowchart TD
-    A([Alert:<br/>ACC-500 to ACC-700<br/>$2.5M]) --> B
+    A([🚨 Alert:<br/>ACC-500 → ACC-700<br/>$2.5M]) --> B
 
-    subgraph Trap["The Bait - Do Not Take It"]
-        X["$100 transfer<br/>to Watchlist Target"]
+    subgraph Trap["❌ The Bait  — Don't Take It"]
+        X["$100 transfer<br/>to 'Watchlist Target'"]
     end
 
     subgraph Investigation["The Real Loop"]
         B --> C["search_transactions<br/>ACC-700<br/>keyword: 'consulting'"]
-        C --> D{48hrs later:<br/>ACC-700 to ACC-888<br/>$2.4M offshore}
+        C --> D{48hrs later:<br/>ACC-700 → ACC-888<br/>$2.4M offshore}
         D --> E[get_kyc_record<br/>ACC-888]
         E --> F{Director:<br/>Robert House}
         F --> G[get_kyc_record<br/>ACC-500]
         G --> H{Director:<br/>Apex Management Corp}
         H --> I[get_kyc_record<br/>Apex Management Corp]
-        I --> J{CEO:<br/>Robert House same person}
+        I --> J{CEO:<br/>Robert House ← same person}
     end
 
     A -.->|naive agent wastes budget| X
-    J --> K([submit_decision<br/>FRAUD<br/>evidence: ACC-500, ACC-700, ACC-888])
+    J --> K([🚨 submit_decision<br/>FRAUD<br/>evidence: ACC-500, ACC-700, ACC-888])
 
     style A fill:#ef4444,color:#fff
     style X fill:#6b7280,color:#fff,stroke-dasharray: 5 5
+    style Trap fill:#1f2937,color:#9ca3af
     style K fill:#dc2626,color:#fff
     style J fill:#fbbf24,color:#000
 ```
@@ -274,6 +275,88 @@ Transaction `memo_text` is typed by sender/receiver pair to simulate realistic c
 | Individual → Individual | `Dinner split`, `Rent share`, `Birthday gift` | $10–$500 |
 
 Fraud scenarios are injected with camouflage: 5–10 "normal" bridging transactions connect each manual account to the procedural haystack so no fraud node appears as an isolated island in the graph.
+
+---
+
+## Baseline Results
+
+> **Model:** `openai/gpt-oss-20b` · **CoT:** enabled · **Run:** single pass, no fine-tuning
+
+| Task | Steps Used | Budget | Grader Score | Net Reward | Verdict | Result |
+|---|---|---|---|---|---|---|
+| `aml_easy` | 3 / 5 | 2 remaining | 0.75 | **+0.69** | `CLEAR` ✓ | ✅ Pass |
+| `aml_medium` | 6 / 12 | 6 remaining | 0.75 | **+0.63** | `FRAUD` ✓ | ✅ Pass |
+| `aml_hard` | 16 / 20 | 0 remaining | 0.00 | **−0.32** | none | ❌ Fail |
+
+Net reward = grader score − (steps × 0.02)
+
+### Per-Task Analysis
+
+**`aml_easy` — Pass (0.75 / 1.0)**
+
+The agent navigated the task in the minimum viable number of steps: one transaction query, one KYC lookup, then `CLEAR`. It correctly ignored the high-risk jurisdiction flag after reading the memo. The score stopped at `0.75` rather than `1.0` because `evidence_links` was submitted empty — the grader expects at least the cleared account ID as documented evidence of the reasoning chain.
+
+```
+[STEP] query_transactions  ACC-9001
+[STEP] get_kyc_record      ENT-9001
+[STEP] submit_decision     CLEAR  evidence=[]   ← missing evidence → capped at 0.75
+```
+
+**`aml_medium` — Pass (0.75 / 1.0)**
+
+The agent identified structuring activity and correctly returned a `FRAUD` verdict, but submitted only one of the three smurf accounts (`ACC-9010`) in evidence. The grader applies partial credit proportional to smurf accounts found — `1/3` identified yields `0.75`. The agent also issued a `search_transactions` call with keyword `"Invoice"` which was not relevant to the structuring pattern, suggesting mild reasoning noise before it converged on the correct account.
+
+```
+[STEP] query_transactions  ACC-9010 (offset 0)
+[STEP] query_transactions  ACC-9011 (offset 0)
+[STEP] get_kyc_record      ENT-9010
+[STEP] search_transactions ACC-9010  keyword="Invoice"   ← off-path call
+[STEP] get_kyc_record      ENT-0159
+[STEP] submit_decision     FRAUD  evidence=["ACC-9010"]  ← found 1/3 smurfs → 0.75
+```
+
+**`aml_hard` — Fail (0.00)**
+
+The model completed two valid steps (paginating `ACC-9021` at offset 0 and 10), then entered a catastrophic failure loop. From step 3 onward, the model produced empty or non-JSON output on every turn, triggering the recovery action, which defaulted to `query_transactions(ACC-9021, offset=0)` — the same call, 14 times in a row. The budget was exhausted without a `submit_decision` ever being issued.
+
+```
+[STEP] query_transactions  ACC-9021  offset=0   ← valid
+[STEP] query_transactions  ACC-9021  offset=10  ← valid
+[DEBUG] Non-JSON/invalid model action × 14      ← context collapse
+[END]  score=0.00  budget exhausted
+```
+
+The root cause is context window pressure. By step 2, the sliding window already contained two large paginated transaction payloads.
+
+### Failure Mode Summary
+
+```mermaid
+flowchart LR
+    A[Step 2: Two large<br/>transaction payloads<br/>in context] --> B[Model outputs<br/>prose instead of JSON]
+    B --> C[Recovery action:<br/>query_transactions<br/>offset=0]
+    C --> D[Same large payload<br/>re-injected into context]
+    D --> B
+    D --> E{Budget = 0}
+    E --> F([score = 0.00])
+
+    style B fill:#ef4444,color:#fff
+    style F fill:#7f1d1d,color:#fff
+```
+
+### What This Tells Us
+
+The tasks are correctly difficulty-stratified.
+The easy and medium tasks are solvable by an instruction-following model with chain-of-thought, but not perfectly — both runs left score on the table due to incomplete evidence submission.
+The hard task exposes a genuine capability gap: multi-hop KYC cross-referencing under token pressure requires either a larger model, a tighter context compaction strategy, or both.
+
+The `[DEBUG] Non-JSON/invalid model action` recovery path is functioning as designed — the environment did not crash, and each recovery action was logged and penalized correctly.
+
+| Failure Mode | Observed In | Environment Response |
+|---|---|---|
+| Empty `evidence_links` on correct verdict | Easy, Medium | Grader caps score; no crash |
+| Off-path tool calls | Medium | Step penalty applied; agent self-corrects |
+| Context collapse → non-JSON output | Hard | Recovery action fired; logged as `[DEBUG]` |
+| Recovery loop exhausts budget | Hard | Episode terminates cleanly; score `0.00` |
 
 ---
 
