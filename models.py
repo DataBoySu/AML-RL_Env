@@ -52,3 +52,4 @@ class AmlAction(Action):
     action: Union[QueryTransactions, SearchTransactions, GetKYCRecord, SubmitDecision] = Field(
         discriminator='action_type'
     )
+    

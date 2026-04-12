@@ -16,7 +16,7 @@ from server.AML_env_environment import AmlEnvironment
 from models import AmlAction
 
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1") or "http://127.0.0.1:1234"
+API_BASE_URL = os.getenv("API_BASE_URL") or "http://127.0.0.1:1234/v1"
 MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-oss-20b")
 HF_TOKEN = os.getenv("HF_TOKEN") or "lm-studio"
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
@@ -41,6 +41,70 @@ SYSTEM_PROMPT = textwrap.dedent(
     4. {"action": {"action_type": "submit_decision", "decision": "FRAUD", "evidence_links": ["ACC-1234"]}} (Use "CLEAR" for False Positives with empty evidence_links).
     """
 ).strip()
+
+FALLBACK_ACTION_JSON = '{"action": {"action_type": "submit_decision", "decision": "CLEAR", "evidence_links": []}}'
+
+
+def _extract_text_from_chat_completion(completion: object) -> str:
+    choices = getattr(completion, "choices", None) or []
+    if not choices:
+        raise ValueError("Model response has no choices")
+
+    first_choice = choices[0]
+    message = getattr(first_choice, "message", None)
+    if message is None:
+        raise ValueError("Model response choice has no message")
+
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+
+    if isinstance(content, list):
+        chunks: List[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text_val = item.get("text")
+                if isinstance(text_val, str):
+                    chunks.append(text_val)
+        merged = "".join(chunks).strip()
+        if merged:
+            return merged
+
+    raise ValueError("Model response content is empty")
+
+
+def _extract_text_from_responses_api(response: object) -> str:
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    output = getattr(response, "output", None) or []
+    chunks: List[str] = []
+    for item in output:
+        content = getattr(item, "content", None) or []
+        for part in content:
+            text_val = getattr(part, "text", None)
+            if isinstance(text_val, str):
+                chunks.append(text_val)
+
+    merged = "".join(chunks).strip()
+    if merged:
+        return merged
+
+    raise ValueError("Responses API output is empty")
+
+
+def _extract_text_from_completions_api(completion: object) -> str:
+    choices = getattr(completion, "choices", None) or []
+    if not choices:
+        raise ValueError("Completions API response has no choices")
+
+    first_choice = choices[0]
+    text_val = getattr(first_choice, "text", None)
+    if isinstance(text_val, str) and text_val.strip():
+        return text_val.strip()
+
+    raise ValueError("Completions API response text is empty")
 
 def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
@@ -69,11 +133,37 @@ def get_model_message(client: OpenAI, obs_dict: dict, history: List[str]) -> str
             temperature=0.1,
             max_tokens=200,
         )
-        return (completion.choices[0].message.content or "").strip()
-    except Exception as exc:
-        print(f"[DEBUG] Model request failed: {exc}", file=sys.stderr, flush=True)
-        # Fallback to prevent crash
-        return '{"action": {"action_type": "submit_decision", "decision": "CLEAR", "evidence_links": []}}'
+        return _extract_text_from_chat_completion(completion)
+    except Exception as chat_exc:
+        # Retry via Responses API for OpenAI-compatible providers that do not
+        # populate chat.completions choices consistently.
+        try:
+            response = client.responses.create(
+                model=MODEL_NAME,
+                instructions=SYSTEM_PROMPT,
+                input=user_prompt,
+                max_output_tokens=200,
+            )
+            return _extract_text_from_responses_api(response)
+        except Exception as responses_exc:
+            try:
+                completion = client.completions.create(
+                    model=MODEL_NAME,
+                    prompt=f"{SYSTEM_PROMPT}\n\n{user_prompt}",
+                    temperature=0.1,
+                    max_tokens=200,
+                )
+                return _extract_text_from_completions_api(completion)
+            except Exception as completions_exc:
+                print(
+                    (
+                        "[DEBUG] Model request failed: "
+                        f"chat={chat_exc}; responses={responses_exc}; completions={completions_exc}"
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+        return FALLBACK_ACTION_JSON
 
 async def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
