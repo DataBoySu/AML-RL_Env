@@ -1,5 +1,5 @@
 ---
-title: AML Investigator — OpenEnv RL Environment
+title: Anti Money Laundering RL Env
 emoji: 🕵️
 colorFrom: indigo
 colorTo: red

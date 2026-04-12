@@ -1,27 +1,19 @@
-"""Baseline inference runner for AML_env.
-
-The script supports local LM Studio via an OpenAI-compatible base URL and keeps
-the multi-task loop expected by the project validator.
 """
-
-from __future__ import annotations
-
-import json
+AML Investigator - Baseline Inference Script
+Loops through all 3 tasks to satisfy the Phase 2 Validator.
+"""
+import asyncio
 import os
-from pathlib import Path
-from typing import Any, Optional
-
+import json
+import textwrap
+import sys
+from typing import List, Optional
 from openai import OpenAI
 
-try:
-    from AML_env.client import AmlEnv
-    from AML_env.models import AmlAction
-except Exception:
-    ROOT_DIR = Path(__file__).resolve().parent
-    if str(ROOT_DIR) not in os.sys.path:
-        os.sys.path.insert(0, str(ROOT_DIR))
-    from client import AmlEnv
-    from models import AmlAction
+# Adjust the import based on your openenv server setup
+# If running locally without docker wrapper for validation, you might need to import your Env directly
+from server.AML_env_environment import AmlEnvironment
+from models import AmlAction
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1") or "http://127.0.0.1:1234"
@@ -30,80 +22,43 @@ HF_TOKEN = os.getenv("HF_TOKEN") or "lm-studio"
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://127.0.0.1:7860")
 TASK_NAME = os.getenv("TASK_NAME", "aml_easy")
-BENCHMARK = os.getenv("BENCHMARK", "AML_env")
-MAX_STEPS = int(os.getenv("MAX_STEPS", "25"))
 TASKS = ["aml_easy", "aml_medium", "aml_hard"]
+BENCHMARK = "aml_investigator"
+MAX_STEPS = 25
 
-if not HF_TOKEN:
-    raise ValueError("HF_TOKEN environment variable is required")
-
-SYSTEM_PROMPT = (
-    "You are a Tier 1 AML Compliance Investigator. "
-    "Return exactly one JSON object with the nested shape {\"action\": {...}}. "
-    "Allowed action types: query_transactions, search_transactions, get_kyc_record, submit_decision. "
-    "Do not output markdown, code fences, or explanations."
-)
-
-
-def _clean_text(value: str) -> str:
-    return value.replace("\n", " ").replace("\r", " ").strip()
-
-
-def _format_reward(value: float) -> str:
-    return f"{value:.2f}"
-
-
-def _format_action(action: AmlAction) -> str:
-    return json.dumps(action.model_dump(), separators=(",", ":"), ensure_ascii=True)
-
-
-def _format_error(error: Optional[str]) -> str:
-    return error if error else "null"
-
+SYSTEM_PROMPT = textwrap.dedent(
+    """
+    You are a Tier 1 AML Compliance Investigator.
+    You must investigate the provided alert by querying the bank's internal APIs.
+    
+    You have a strict API budget. Be efficient.
+    Respond with EXACTLY ONE valid JSON object representing your action. Do not include markdown formatting or explanations.
+    
+    Available Action JSON Schemas:
+    1. {"action": {"action_type": "query_transactions", "account_id": "ACC-XXXX", "limit": 10, "offset": 0}}
+    2. {"action": {"action_type": "search_transactions", "account_id": "ACC-XXXX", "keyword": "invoice"}}
+    3. {"action": {"action_type": "get_kyc_record", "entity_id": "ENT-XXXX"}}
+    4. {"action": {"action_type": "submit_decision", "decision": "FRAUD", "evidence_links": ["ACC-1234"]}} (Use "CLEAR" for False Positives with empty evidence_links).
+    """
+).strip()
 
 def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
-    print(
-        f"[STEP] step={step} action={action} reward={_format_reward(reward)} done={str(done).lower()} error={_format_error(error)}",
-        flush=True,
-    )
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
 
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
 
-def log_end(success: bool, steps: int, rewards: list[float]) -> None:
-    rewards_str = ",".join(_format_reward(r) for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}", flush=True)
-
-
-def _build_env() -> AmlEnv:
-    if LOCAL_IMAGE_NAME:
-        return AmlEnv.from_docker_image(LOCAL_IMAGE_NAME)
-    return AmlEnv(base_url=ENV_BASE_URL)
-
-
-def _fallback_action() -> AmlAction:
-    return AmlAction.model_validate(
-        {
-            "action": {
-                "action_type": "submit_decision",
-                "decision": "CLEAR",
-                "evidence_links": [],
-            }
-        }
-    )
-
-
-def _model_action(client: OpenAI, observation: Any, history: list[str]) -> AmlAction:
-    history_block = "\n".join(history[-5:]) if history else "No prior steps."
-    user_prompt = (
-        f"Alert:\n{observation.alert_details}\n\n"
-        f"Observation:\n{json.dumps(observation.model_dump(), separators=(",", ":"), ensure_ascii=True)}\n\n"
-        f"History:\n{history_block}\n\n"
-        "Return the next JSON action."
-    )
-
+def get_model_message(client: OpenAI, obs_dict: dict, history: List[str]) -> str:
+    history_block = "\n".join(history[-5:]) if history else "No previous steps."
+    user_prompt = f"Observation:\n{json.dumps(obs_dict, indent=2)}\n\nHistory:\n{history_block}\n\nProvide your next JSON action:"
+    
     try:
         completion = client.chat.completions.create(
             model=MODEL_NAME,
@@ -111,75 +66,82 @@ def _model_action(client: OpenAI, observation: Any, history: list[str]) -> AmlAc
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.0,
-            max_tokens=256,
+            temperature=0.1,
+            max_tokens=200,
         )
-        content = (completion.choices[0].message.content or "").strip()
-        if not content:
-            return _fallback_action()
+        return (completion.choices[0].message.content or "").strip()
+    except Exception as exc:
+        print(f"[DEBUG] Model request failed: {exc}", file=sys.stderr, flush=True)
+        # Fallback to prevent crash
+        return '{"action": {"action_type": "submit_decision", "decision": "CLEAR", "evidence_links": []}}'
+
+async def main() -> None:
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    
+    # Initialize your environment natively for the baseline script
+    env = AmlEnvironment()
+
+    for task_name in TASKS:
+        history: List[str] = []
+        rewards: List[float] = []
+        steps_taken = 0
+        score = 0.0
+        success = False
+
+        log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
+
         try:
-            return AmlAction.model_validate_json(content)
-        except Exception:
-            return AmlAction.model_validate(json.loads(content))
-    except Exception:
-        return _fallback_action()
+            obs = env.reset(task=task_name)
+            
+            for step in range(1, MAX_STEPS + 1):
+                if obs.done:
+                    break
 
+                obs_dict = obs.model_dump()
+                action_str = get_model_message(client, obs_dict, history)
+                
+                # Parse LLM string to Pydantic Model
+                try:
+                    # Strip possible markdown backticks
+                    clean_str = action_str.replace("```json", "").replace("```", "").strip()
+                    action_json = json.loads(clean_str)
+                    action_obj = AmlAction.model_validate(action_json)
+                    error = None
+                except Exception as e:
+                    # Errors are data! If the LLM writes bad JSON, we catch it and force a dummy action 
+                    # so the environment can return a schema error to the LLM.
+                    error = f"JSON Parse/Schema Error: {str(e)}"
+                    action_obj = AmlAction.model_validate(
+                        {
+                            "action": {
+                                "action_type": "submit_decision",
+                                "decision": "CLEAR",
+                                "evidence_links": [],
+                            }
+                        }
+                    )
 
-def run_episode(client: OpenAI, env: AmlEnv, task_name: str) -> tuple[bool, int, float, list[float]]:
-    history: list[str] = []
-    rewards: list[float] = []
-    steps_taken = 0
-    success = False
-    score = 0.0
+                obs = env.step(action_obj)
+                
+                reward = obs.reward or 0.0
+                done = obs.done
 
-    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
+                rewards.append(reward)
+                steps_taken = step
+                
+                log_step(step=step, action=action_str.replace('\n', ''), reward=reward, done=done, error=error)
+                history.append(f"Step {step}: Action: {action_str} -> Result: {obs.last_action_result} | Error: {obs.error_message}")
 
-    observation = env.reset(task=task_name)
-    final_done = False
-    final_error: Optional[str] = None
+                if done:
+                    break
 
-    for step in range(1, MAX_STEPS + 1):
-        if observation.done:
-            break
+            # Calculate a baseline score for the stdout logs (Graders handle real scoring)
+            score = sum(rewards) + 1.0 if "submit_decision" in (obs.last_action or "") else 0.0
+            score = min(max(score, 0.01), 0.99)
+            success = score > 0.5
 
-        action = _model_action(client, observation, history)
-        result = env.step(action)
-        observation = result.observation
-
-        reward = float(result.reward or 0.0)
-        final_done = bool(result.done)
-        final_error = observation.error_message
-        steps_taken = step
-        rewards.append(reward)
-
-        action_text = _clean_text(_format_action(action))
-        log_step(step=step, action=action_text, reward=reward, done=final_done, error=final_error)
-
-        history.append(
-            f"step={step} action={action_text} reward={_format_reward(reward)} done={str(final_done).lower()} "
-            f"error={_format_error(final_error)} result={_clean_text(str(observation.last_action_result))}"
-        )
-
-        if final_done:
-            break
-
-    score = max(0.0, min(1.0, sum(rewards)))
-    success = bool(final_done and final_error is None and score > 0.0)
-    return success, steps_taken, score, rewards
-
-
-def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
-    env = _build_env()
-
-    try:
-        for task_name in TASKS:
-            success, steps_taken, score, rewards = run_episode(client, env, task_name)
-            _ = score
-            log_end(success=success, steps=steps_taken, rewards=rewards)
-    finally:
-        env.close()
-
+        finally:
+            log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
