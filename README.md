@@ -11,9 +11,11 @@ tags:
   - openenv
 ---
 
-# Aml Env Environment
+# AML Investigator Environment
 
-A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
+A financial crime investigation environment for Reinforcement Learning agents.
+The agent must query a mock banking system (transactions, KYC records) under a strict API budget
+to investigate flagged accounts and submit a final fraud/clear decision.
 
 ## Quick Start
 
@@ -23,26 +25,33 @@ The simplest way to use the Aml Env environment is through the `AmlEnv` class:
 from AML_env import AmlAction, AmlEnv
 
 try:
-    # Create environment from Docker image
-    AML_envenv = AmlEnv.from_docker_image("AML_env-env:latest")
+    # Create environment from Docker image (built from root Dockerfile)
+    env = AmlEnv.from_docker_image("aml-env:latest")
 
-    # Reset
-    result = AML_envenv.reset()
-    print(f"Reset: {result.observation.echoed_message}")
+    # Reset to a specific task
+    obs = env.reset(task="aml_easy")
+    print(f"Alert: {obs.observation.alert_details}")
+    print(f"Budget: {obs.observation.budget_remaining}")
 
-    # Send multiple messages
-    messages = ["Hello, World!", "Testing echo", "Final message"]
+    # Query transactions
+    result = env.step(AmlAction(action={
+        "action_type": "query_transactions",
+        "account_id": "ACC-9001",
+        "limit": 10,
+        "offset": 0,
+    }))
+    print(f"Transactions: {result.observation.last_action_result}")
 
-    for msg in messages:
-        result = AML_envenv.step(AmlAction(message=msg))
-        print(f"Sent: '{msg}'")
-        print(f"  → Echoed: '{result.observation.echoed_message}'")
-        print(f"  → Length: {result.observation.message_length}")
-        print(f"  → Reward: {result.reward}")
+    # Submit final decision
+    result = env.step(AmlAction(action={
+        "action_type": "submit_decision",
+        "decision": "CLEAR",
+        "evidence_links": [],
+    }))
+    print(f"Done: {result.done}, Reward: {result.reward}")
 
 finally:
-    # Always clean up
-    AML_envenv.close()
+    env.close()
 ```
 
 That's it! The `AmlEnv.from_docker_image()` method handles:
@@ -57,7 +66,7 @@ Before using the environment, you need to build the Docker image:
 
 ```bash
 # From project root
-docker build -t AML_env-env:latest -f server/Dockerfile .
+docker build -t aml-env:latest .
 ```
 
 ## Deploying to Hugging Face Spaces
@@ -118,23 +127,34 @@ The deployed space includes:
 
 ## Environment Details
 
-### Action
-**AmlAction**: Contains a single field
-- `message` (str) - The message to echo back
+### Action Space
+**AmlAction** wraps one of four tool calls (discriminated by `action_type`):
 
-### Observation
-**AmlObservation**: Contains the echo response and metadata
-- `echoed_message` (str) - The message echoed back
-- `message_length` (int) - Length of the message
-- `reward` (float) - Reward based on message length (length × 0.1)
-- `done` (bool) - Always False for echo environment
-- `metadata` (dict) - Additional info like step count
+| Tool | Fields | Description |
+|---|---|---|
+| `query_transactions` | `account_id`, `limit`, `offset` | Paginated transaction history for an account |
+| `search_transactions` | `account_id`, `keyword` | Search memo_text of transactions |
+| `get_kyc_record` | `entity_id` | Retrieve KYC data for an entity |
+| `submit_decision` | `decision` (`FRAUD`\|`CLEAR`), `evidence_links` | Final verdict — ends the episode |
+
+### Observation Space
+**AmlObservation** is returned after every `reset()` and `step()`:
+
+| Field | Type | Description |
+|---|---|---|
+| `alert_details` | `str` | The investigation mission (constant per episode) |
+| `budget_remaining` | `int` | API calls left before forced termination |
+| `last_action` | `str \| None` | Name of the last tool called |
+| `last_action_result` | `Any` | Payload returned by the last tool |
+| `error_message` | `str \| None` | Error string if the last action failed |
+| `done` | `bool` | Whether the episode has ended |
+| `reward` | `float` | Per-step reward signal |
 
 ### Reward
-The reward is calculated as: `message_length × 0.1`
-- "Hi" → reward: 0.2
-- "Hello, World!" → reward: 1.3
-- Empty message → reward: 0.0
+- **Per step:** `-0.02` (efficiency penalty discourages random looping)
+- **Submit FRAUD (correct):** grader returns `0.4`–`1.0` depending on evidence quality
+- **Submit CLEAR (correct false positive):** grader returns `1.0`
+- **Budget exhausted without submission:** episode ends with accumulated negative rewards
 
 ## Advanced Usage
 
@@ -239,17 +259,33 @@ uvicorn server.app:app --reload
 
 ```
 AML_env/
-├── .dockerignore         # Docker build exclusions
-├── __init__.py            # Module exports
-├── README.md              # This file
-├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
-├── uv.lock                # Locked dependencies (generated)
-├── client.py              # AmlEnv client
-├── models.py              # Action and Observation models
-└── server/
-    ├── __init__.py        # Server module exports
-    ├── AML_env_environment.py  # Core environment logic
-    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
-    └── Dockerfile         # Container image definition
+├── Dockerfile                    # Container image (root, HF Spaces compliant)
+├── .dockerignore                 # Docker build exclusions
+├── .hfignore                     # HF Space upload exclusions
+├── .gitignore                    # Git exclusions
+├── __init__.py                   # Package exports (AmlEnv, AmlAction, AmlObservation)
+├── client.py                     # AmlEnv WebSocket client
+├── models.py                     # Pydantic action/observation schemas
+├── inference.py                  # Baseline RL agent (OpenAI client, [START]/[STEP]/[END] logs)
+├── openenv.yaml                  # OpenEnv manifest (tasks, graders, port)
+├── pyproject.toml                # Project metadata and uv dependencies
+├── uv.lock                       # Locked dependency graph
+├── README.md                     # This file (also HF Space card)
+├── data/
+│   ├── entities.json             # 312 KYC entity records
+│   ├── accounts.json             # 410 bank accounts
+│   └── transactions.json         # 5,079 transactions (haystack + fraud scenarios)
+├── graders/
+│   ├── __init__.py
+│   ├── aml_easy.py               # "The False Positive" grader
+│   ├── aml_medium.py             # "The Smurf Network" grader
+│   └── aml_hard.py               # "The Corporate Mirage" grader
+├── server/
+│   ├── __init__.py
+│   ├── AML_env_environment.py    # Core OpenEnv environment (reset/step/state)
+│   ├── app.py                    # FastAPI server (CORS, create_app wrapper)
+│   └── requirements.txt          # Pip fallback requirements
+└── tools/
+    ├── haystack.py               # Financial graph generator
+    └── tasks.json                # Manual fraud scenario definitions
 ```

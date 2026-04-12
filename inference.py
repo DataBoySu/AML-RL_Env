@@ -15,14 +15,14 @@ from openenv.core.env_server.interfaces import Environment
 from server.AML_env_environment import AmlEnvironment
 from models import AmlAction
 
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
+API_KEY = os.getenv("HF_TOKEN") or "lm-studio"
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1" or "http://localhost:1234/v1"
+MODEL_NAME = os.getenv("MODEL_NAME") or "openai/gpt-oss-20b"
 
 # Must match openenv.yaml EXACTLY
 TASKS = ["aml_easy", "aml_medium", "aml_hard"]
 BENCHMARK = "aml_investigator"
-MAX_STEPS = 25 # High enough to allow the budget to kill the episode organically
+MAX_STEPS = 25
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
@@ -125,7 +125,7 @@ async def main() -> None:
                     break
 
             # Calculate a baseline score for the stdout logs (Graders handle real scoring)
-            score = sum(rewards) + 1.0 if "submit_decision" in obs.last_action else 0.0
+            score = sum(rewards) + 1.0 if "submit_decision" in (obs.last_action or "") else 0.0
             score = min(max(score, 0.0), 1.0)
             success = score > 0.5
 

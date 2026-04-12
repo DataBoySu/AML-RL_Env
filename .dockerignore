@@ -46,3 +46,7 @@ pre-val.sh
 test_redirect.py
 openenv_AML_env.egg-info/
 openenv_tracefix_rl.egg-info/
+.venv/
+__pycache__/
+*.pyc
+.git/

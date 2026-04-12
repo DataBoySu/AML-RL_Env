@@ -4,7 +4,11 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Aml Env Environment Client."""
+"""AML Investigator Environment Client.
+
+High-level WebSocket client that wraps the OpenEnv EnvClient base class
+with AML-specific action/observation types.
+"""
 
 from typing import Dict
 
@@ -15,83 +19,82 @@ from openenv.core.env_server.types import State
 from .models import AmlAction, AmlObservation
 
 
-class AmlEnv(
-    EnvClient[AmlAction, AmlObservation, State]
-):
+class AmlEnv(EnvClient[AmlAction, AmlObservation, State]):
     """
-    Client for the Aml Env Environment.
+    WebSocket client for the AML Investigator environment.
 
-    This client maintains a persistent WebSocket connection to the environment server,
-    enabling efficient multi-step interactions with lower latency.
-    Each client instance has its own dedicated environment session on the server.
+    Maintains a persistent WebSocket connection to the environment server,
+    enabling efficient multi-step investigations with lower per-step latency.
 
-    Example:
-        >>> # Connect to a running server
-        >>> with AmlEnv(base_url="http://localhost:8000") as client:
-        ...     result = client.reset()
-        ...     print(result.observation.echoed_message)
-        ...
-        ...     result = client.step(AmlAction(message="Hello!"))
-        ...     print(result.observation.echoed_message)
-
-    Example with Docker:
-        >>> # Automatically start container and connect
-        >>> client = AmlEnv.from_docker_image("AML_env-env:latest")
+    Example (Docker):
+        >>> client = AmlEnv.from_docker_image("aml-env:latest")
         >>> try:
-        ...     result = client.reset()
-        ...     result = client.step(AmlAction(message="Test"))
+        ...     obs = client.reset(task="aml_easy")
+        ...     result = client.step(AmlAction(action={
+        ...         "action_type": "query_transactions",
+        ...         "account_id": "ACC-9001"
+        ...     }))
+        ...     print(result.observation.last_action_result)
         ... finally:
         ...     client.close()
+
+    Example (existing server):
+        >>> with AmlEnv(base_url="http://localhost:7860") as env:
+        ...     obs = env.reset(task="aml_easy")
+        ...     result = env.step(AmlAction(action={
+        ...         "action_type": "submit_decision",
+        ...         "decision": "CLEAR",
+        ...         "evidence_links": []
+        ...     }))
     """
 
     def _step_payload(self, action: AmlAction) -> Dict:
         """
-        Convert AmlAction to JSON payload for step message.
+        Serialize AmlAction to the JSON dict sent over the WebSocket.
 
         Args:
-            action: AmlAction instance
+            action: Typed AmlAction wrapper containing the specific tool call.
 
         Returns:
-            Dictionary representation suitable for JSON encoding
+            Dict with the nested ``action`` key the server expects.
         """
-        return {
-            "message": action.message,
-        }
+        return action.model_dump()
 
     def _parse_result(self, payload: Dict) -> StepResult[AmlObservation]:
         """
-        Parse server response into StepResult[AmlObservation].
+        Deserialize the server's JSON response into a typed StepResult.
 
         Args:
-            payload: JSON response data from server
+            payload: Raw JSON response dict from the server.
 
         Returns:
-            StepResult with AmlObservation
+            StepResult containing an AmlObservation.
         """
         obs_data = payload.get("observation", {})
         observation = AmlObservation(
-            echoed_message=obs_data.get("echoed_message", ""),
-            message_length=obs_data.get("message_length", 0),
+            alert_details=obs_data.get("alert_details", ""),
+            budget_remaining=obs_data.get("budget_remaining", 0),
+            last_action=obs_data.get("last_action"),
+            last_action_result=obs_data.get("last_action_result"),
+            error_message=obs_data.get("error_message"),
             done=payload.get("done", False),
-            reward=payload.get("reward"),
-            metadata=obs_data.get("metadata", {}),
+            reward=payload.get("reward", 0.0),
         )
-
         return StepResult(
             observation=observation,
-            reward=payload.get("reward"),
+            reward=payload.get("reward", 0.0),
             done=payload.get("done", False),
         )
 
     def _parse_state(self, payload: Dict) -> State:
         """
-        Parse server response into State object.
+        Deserialize the server's /state response into a State object.
 
         Args:
-            payload: JSON response from state request
+            payload: Raw JSON response dict from the server.
 
         Returns:
-            State object with episode_id and step_count
+            State with episode_id and step_count.
         """
         return State(
             episode_id=payload.get("episode_id"),
