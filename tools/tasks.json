@@ -1,0 +1,239 @@
+{
+    "_comment": "Hand-crafted SOTA-Killer Fraud Tasks. Injected into the procedural haystack.",
+    "_id_conventions": {
+        "entities": "Use ENT-9001 and above",
+        "accounts": "Use ACC-9001 and above",
+        "transactions": "Use TXN-900001 and above"
+    },
+    "entities": [
+        {
+            "_task": "EASY - The False Positive",
+            "entity_id": "ENT-9001",
+            "name": "Springfield Construction LLC",
+            "type": "Corporate",
+            "registration_address": "404 Industrial Way, IL",
+            "directors": []
+        },
+        {
+            "_task": "EASY - The False Positive",
+            "entity_id": "ENT-9002",
+            "name": "Global Tractor Sales Ltd.",
+            "type": "Corporate",
+            "registration_address": "High-Risk Jurisdiction, Cyprus",
+            "directors": []
+        },
+        {
+            "_task": "MEDIUM - The Smurfs (Structuring)",
+            "entity_id": "ENT-9010",
+            "name": "Downtown Used Auto",
+            "type": "Corporate",
+            "registration_address": "101 Main St",
+            "directors": []
+        },
+        {
+            "_task": "MEDIUM - The Smurfs (Structuring)",
+            "entity_id": "ENT-9011",
+            "name": "Sam Student",
+            "type": "Individual",
+            "registration_address": "Dorm 4B, State Uni",
+            "directors": []
+        },
+        {
+            "_task": "MEDIUM - The Smurfs (Structuring)",
+            "entity_id": "ENT-9012",
+            "name": "Alex Undergrad",
+            "type": "Individual",
+            "registration_address": "Dorm 4B, State Uni",
+            "directors": []
+        },
+        {
+            "_task": "MEDIUM - The Smurfs (Structuring)",
+            "entity_id": "ENT-9013",
+            "name": "Taylor Freshman",
+            "type": "Individual",
+            "registration_address": "Dorm 4B, State Uni",
+            "directors": []
+        },
+        {
+            "_task": "HARD - The Corporate Mirage (The Mastermind)",
+            "entity_id": "ENT-9025",
+            "name": "Robert House",
+            "type": "Individual",
+            "registration_address": "1 Billionaire Row, NY",
+            "directors": []
+        },
+        {
+            "_task": "HARD - The Corporate Mirage (Parent Company)",
+            "entity_id": "ENT-9024",
+            "name": "Apex Management Corp",
+            "type": "Corporate",
+            "registration_address": "100 Wall St, NY",
+            "directors": [
+                "ENT-9025"
+            ]
+        },
+        {
+            "_task": "HARD - The Corporate Mirage (Sender)",
+            "entity_id": "ENT-9021",
+            "name": "Major Logistics Firm LLC",
+            "type": "Corporate",
+            "registration_address": "Port Authority, NJ",
+            "directors": [
+                "ENT-9024"
+            ]
+        },
+        {
+            "_task": "HARD - The Corporate Mirage (The Middleman)",
+            "entity_id": "ENT-9022",
+            "name": "Generic Consulting Agency",
+            "type": "Corporate",
+            "registration_address": "500 Madison Ave, NY",
+            "directors": []
+        },
+        {
+            "_task": "HARD - The Corporate Mirage (The Offshore Loop)",
+            "entity_id": "ENT-9023",
+            "name": "Island Holding Company",
+            "type": "Corporate",
+            "registration_address": "Grand Cayman",
+            "directors": [
+                "ENT-9025"
+            ]
+        },
+        {
+            "_task": "HARD - The Corporate Mirage (The False Flag Trap)",
+            "entity_id": "ENT-9026",
+            "name": "Al-Qaeda Watchlist Target",
+            "type": "Individual",
+            "registration_address": "Unknown",
+            "directors": []
+        }
+    ],
+    "accounts": [
+        {
+            "_task": "EASY",
+            "account_id": "ACC-9001",
+            "owner_entity_id": "ENT-9001",
+            "status": "Active"
+        },
+        {
+            "_task": "EASY",
+            "account_id": "ACC-9002",
+            "owner_entity_id": "ENT-9002",
+            "status": "Active"
+        },
+        {
+            "_task": "MEDIUM",
+            "account_id": "ACC-9010",
+            "owner_entity_id": "ENT-9010",
+            "status": "Active"
+        },
+        {
+            "_task": "MEDIUM",
+            "account_id": "ACC-9011",
+            "owner_entity_id": "ENT-9011",
+            "status": "Active"
+        },
+        {
+            "_task": "MEDIUM",
+            "account_id": "ACC-9012",
+            "owner_entity_id": "ENT-9012",
+            "status": "Active"
+        },
+        {
+            "_task": "MEDIUM",
+            "account_id": "ACC-9013",
+            "owner_entity_id": "ENT-9013",
+            "status": "Active"
+        },
+        {
+            "_task": "HARD",
+            "account_id": "ACC-9021",
+            "owner_entity_id": "ENT-9021",
+            "status": "Active"
+        },
+        {
+            "_task": "HARD",
+            "account_id": "ACC-9022",
+            "owner_entity_id": "ENT-9022",
+            "status": "Active"
+        },
+        {
+            "_task": "HARD",
+            "account_id": "ACC-9023",
+            "owner_entity_id": "ENT-9023",
+            "status": "Active"
+        },
+        {
+            "_task": "HARD",
+            "account_id": "ACC-9026",
+            "owner_entity_id": "ENT-9026",
+            "status": "Active"
+        }
+    ],
+    "transactions": [
+        {
+            "_task": "EASY - Looks bad (High Risk Area) but is just buying tractors.",
+            "txn_id": "TXN-900001",
+            "sender_account": "ACC-9001",
+            "receiver_account": "ACC-9002",
+            "amount": 50000.00,
+            "timestamp": "2025-04-01T09:00:00+00:00",
+            "memo_text": "Heavy Machinery Purchase - Unit 4"
+        },
+        {
+            "_task": "MEDIUM - Smurf 1",
+            "txn_id": "TXN-900010",
+            "sender_account": "ACC-9011",
+            "receiver_account": "ACC-9010",
+            "amount": 9900.00,
+            "timestamp": "2025-04-05T10:00:00+00:00",
+            "memo_text": "Vehicle deposit"
+        },
+        {
+            "_task": "MEDIUM - Smurf 2",
+            "txn_id": "TXN-900011",
+            "sender_account": "ACC-9012",
+            "receiver_account": "ACC-9010",
+            "amount": 9500.00,
+            "timestamp": "2025-04-05T11:30:00+00:00",
+            "memo_text": "Used car payment"
+        },
+        {
+            "_task": "MEDIUM - Smurf 3",
+            "txn_id": "TXN-900012",
+            "sender_account": "ACC-9013",
+            "receiver_account": "ACC-9010",
+            "amount": 9850.00,
+            "timestamp": "2025-04-05T14:15:00+00:00",
+            "memo_text": "Down payment"
+        },
+        {
+            "_task": "HARD - The False Flag (The Bait). Distracts from the $2.5M crime.",
+            "txn_id": "TXN-900020",
+            "sender_account": "ACC-9021",
+            "receiver_account": "ACC-9026",
+            "amount": 100.00,
+            "timestamp": "2025-04-10T08:00:00+00:00",
+            "memo_text": "Charitable Donation"
+        },
+        {
+            "_task": "HARD - The Main Transfer out.",
+            "txn_id": "TXN-900021",
+            "sender_account": "ACC-9021",
+            "receiver_account": "ACC-9022",
+            "amount": 2500000.00,
+            "timestamp": "2025-04-10T09:00:00+00:00",
+            "memo_text": "Q2 Consulting and Advisory Retainer"
+        },
+        {
+            "_task": "HARD - The Hidden Loop integration. Same Mastermind Director (ENT-9025).",
+            "txn_id": "TXN-900022",
+            "sender_account": "ACC-9022",
+            "receiver_account": "ACC-9023",
+            "amount": 2400000.00,
+            "timestamp": "2025-04-12T10:00:00+00:00",
+            "memo_text": "Offshore IP Licensing Fee"
+        }
+    ]
+}
