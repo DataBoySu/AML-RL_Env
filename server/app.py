@@ -5,80 +5,92 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-FastAPI application for the Aml Env Environment.
+FastAPI application for the AML Investigator Environment.
 
-This module creates an HTTP server that exposes the AmlEnvironment
-over HTTP and WebSocket endpoints, compatible with EnvClient.
+Wraps AmlEnvironment with OpenEnv's create_app utility, exposing the
+standard OpenEnv HTTP endpoints required by the evaluator:
 
-Endpoints:
-    - POST /reset: Reset the environment
-    - POST /step: Execute an action
-    - GET /state: Get current environment state
-    - GET /schema: Get action/observation schemas
-    - WS /ws: WebSocket endpoint for persistent sessions
+    POST /reset  — Reset episode, returns initial AmlObservation
+    POST /step   — Execute an AmlAction, returns AmlObservation
+    GET  /state  — Return current internal State object
+    GET  /schema — Return action/observation JSON schemas
+    WS   /ws     — WebSocket endpoint for persistent sessions
 
-Usage:
-    # Development (with auto-reload):
-    uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
+CORS is configured to allow all origins so the hackathon evaluator
+can reach the Space without origin restrictions.
 
-    # Production:
-    uvicorn server.app:app --host 0.0.0.0 --port 8000 --workers 4
+Usage (local dev):
+    uvicorn server.app:app --reload --host 0.0.0.0 --port 7860
 
-    # Or run directly:
-    python -m server.app
+Usage (production / HF Spaces):
+    uvicorn server.app:app --host 0.0.0.0 --port 7860
 """
 
 try:
     from openenv.core.env_server.http_server import create_app
 except Exception as e:  # pragma: no cover
     raise ImportError(
-        "openenv is required for the web interface. Install dependencies with '\n    uv sync\n'"
+        "openenv is required. Install with:\n  pip install -r server/requirements.txt"
     ) from e
 
+from fastapi.middleware.cors import CORSMiddleware
+
 try:
+    # Relative imports when loaded as part of the package (e.g. `python -m server.app`)
     from ..models import AmlAction, AmlObservation
     from .AML_env_environment import AmlEnvironment
-except ModuleNotFoundError:
+except ImportError:
+    # Absolute imports when PYTHONPATH is set to the repo root (Docker / uvicorn CLI)
     from models import AmlAction, AmlObservation
     from server.AML_env_environment import AmlEnvironment
 
 
-# Create the app with web interface and README integration
+# ---------------------------------------------------------------------------
+# Build the OpenEnv-compliant FastAPI application
+# ---------------------------------------------------------------------------
 app = create_app(
     AmlEnvironment,
     AmlAction,
     AmlObservation,
     env_name="AML_env",
-    max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
+    # One concurrent WebSocket session is enough for HF Spaces evaluation.
+    # Increase for multi-agent experiments.
+    max_concurrent_envs=10,
+)
+
+# ---------------------------------------------------------------------------
+# CORS — allow the OpenEnv evaluator (and any browser) to reach the Space
+# ---------------------------------------------------------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
-def main(host: str = "0.0.0.0", port: int = 8000):
+# ---------------------------------------------------------------------------
+# Direct-execution entry point
+# ---------------------------------------------------------------------------
+def main(host: str = "0.0.0.0", port: int = 7860) -> None:
     """
-    Entry point for direct execution via uv run or python -m.
+    Run the server directly.
 
-    This function enables running the server without Docker:
-        uv run --project . server
-        uv run --project . server --port 8001
-        python -m AML_env.server.app
-
-    Args:
-        host: Host address to bind to (default: "0.0.0.0")
-        port: Port number to listen on (default: 8000)
-
-    For production deployments, consider using uvicorn directly with
-    multiple workers:
-        uvicorn AML_env.server.app:app --workers 4
+    Examples:
+        python -m server.app
+        python -m server.app --port 7860
     """
     import uvicorn
 
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run("server.app:app", host=host, port=port, reload=False)
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000)
+    parser = argparse.ArgumentParser(description="AML Investigator OpenEnv server")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind host")
+    parser.add_argument("--port", type=int, default=7860, help="Bind port")
     args = parser.parse_args()
-    main(port=args.port)
+    main(host=args.host, port=args.port)

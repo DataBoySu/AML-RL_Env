@@ -1,0 +1,48 @@
+# ── Python / cache ────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ── Virtual environments / local tooling ──────────────────────────────────────
+.venv/
+.agents/
+.agent/
+node_modules/
+
+# ── Local secrets / config ────────────────────────────────────────────────────
+.env
+.env.*
+CLAUDE.md
+
+# ── VCS and editor noise ──────────────────────────────────────────────────────
+.git/
+.gitignore
+.hfignore
+.DS_Store
+.idea/
+.vscode/
+
+# ── Build / generated artifacts ───────────────────────────────────────────────
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+uv.lock
+
+# ── Local outputs / logs ──────────────────────────────────────────────────────
+outputs/
+*.log
+.github/
+
+# ── Hackathon-internal docs (not for public HF Space) ────────────────────────
+AI_ENGINEERING_PRINCIPLES.txt
+RULES.md
+Tasks.md
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+test_redirect.py
+pre-val.sh
+openenv_AML_env.egg-info/
+openenv_tracefix_rl.egg-info/

@@ -3,5 +3,20 @@ name: AML_env
 type: space
 runtime: fastapi
 app: server.app:app
-port: 8000
-
+port: 7860
+tasks:
+  - id: "aml_easy"
+    name: "The False Positive"
+    description: "System Alert: ACC-9001 flagged for high-risk transfer. Investigate and submit decision."
+    difficulty: "easy"
+    grader: "graders.aml_easy:grade"
+  - id: "aml_medium"
+    name: "The Smurf Network"
+    description: "System Alert: ACC-9010 flagged for anomalous deposit velocity. Investigate for structuring."
+    difficulty: "medium"
+    grader: "graders.aml_medium:grade"
+  - id: "aml_hard"
+    name: "The Corporate Mirage"
+    description: "System Alert: ACC-9021 flagged for large outbound transfer. Investigate for hidden circular loops."
+    difficulty: "hard"
+    grader: "graders.aml_hard:grade"

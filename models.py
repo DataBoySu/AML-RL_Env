@@ -12,16 +12,43 @@ The AML_env environment is a simple test environment that echoes back messages.
 
 from openenv.core.env_server.types import Action, Observation
 from pydantic import Field
+from typing import List, Literal, Optional, Any, Union
 
-
-class AmlAction(Action):
-    """Action for the Aml Env environment - just a message to echo."""
-
-    message: str = Field(..., description="Message to echo back")
-
-
+# ==========================================
+# OBSERVATION SPACE
+# ==========================================
 class AmlObservation(Observation):
-    """Observation from the Aml Env environment - the echoed message."""
+    alert_details: str = Field(description="The constant mission objective and initial alert.")
+    budget_remaining: int = Field(description="API calls remaining.")
+    last_action: Optional[str] = Field(default=None, description="Last tool used.")
+    last_action_result: Optional[Any] = Field(default=None, description="Payload returned by the API.")
+    error_message: Optional[str] = Field(default=None, description="Error string if action failed.")
 
-    echoed_message: str = Field(default="", description="The echoed message")
-    message_length: int = Field(default=0, description="Length of the echoed message")
+# ==========================================
+# ACTION SPACE
+# ==========================================
+class QueryTransactions(Action):
+    action_type: Literal["query_transactions"]
+    account_id: str = Field(description="The exact ACC-XXXX ID to query.")
+    limit: int = Field(default=10, description="Max transactions to return.")
+    offset: int = Field(default=0, description="Offset for pagination.")
+
+class SearchTransactions(Action):
+    action_type: Literal["search_transactions"]
+    account_id: str = Field(description="The exact ACC-XXXX ID to query.")
+    keyword: str = Field(description="Keyword to search in memo_text.")
+
+class GetKYCRecord(Action):
+    action_type: Literal["get_kyc_record"]
+    entity_id: str = Field(description="The exact ENT-XXXX ID to look up.")
+
+class SubmitDecision(Action):
+    action_type: Literal["submit_decision"]
+    decision: Literal["FRAUD", "CLEAR"] = Field(description="Your final verdict.")
+    evidence_links: List[str] = Field(description="List of ACC-XXXX or ENT-XXXX IDs proving fraud.")
+
+# The master Action model using Union
+class AmlAction(Action):
+    action: Union[QueryTransactions, SearchTransactions, GetKYCRecord, SubmitDecision] = Field(
+        discriminator='action_type'
+    )
