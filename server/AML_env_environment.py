@@ -13,6 +13,7 @@ explore a massive transaction graph using a strict budget.
 
 import json
 import os
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -73,9 +74,15 @@ class AmlEnvironment(Environment):
                 # Sort transactions by timestamp to ensure deterministic pagination
                 self.transactions_db = sorted(txn_list, key=lambda x: x.get("timestamp", ""))
                 
-            print(f"[AML-ENV] Loaded {len(self.entities_db)} entities, {len(self.accounts_db)} accounts, {len(self.transactions_db)} transactions.")
+            print(
+                f"[AML-ENV] Loaded {len(self.entities_db)} entities, {len(self.accounts_db)} accounts, {len(self.transactions_db)} transactions.",
+                file=sys.stderr,
+            )
         except Exception as e:
-            print(f"[AML-ENV ERROR] Failed to load data from {data_dir}. Ensure JSON files exist. Error: {e}")
+            print(
+                f"[AML-ENV ERROR] Failed to load data from {data_dir}. Ensure JSON files exist. Error: {e}",
+                file=sys.stderr,
+            )
             self.entities_db = {}
             self.accounts_db = {}
             self.transactions_db = []

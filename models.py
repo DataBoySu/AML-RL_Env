@@ -11,7 +11,7 @@ The AML_env environment is a simple test environment that echoes back messages.
 """
 
 from openenv.core.env_server.types import Action, Observation
-from pydantic import Field
+from pydantic import BaseModel, Field
 from typing import List, Literal, Optional, Any, Union
 
 # ==========================================
@@ -47,8 +47,28 @@ class SubmitDecision(Action):
     decision: Literal["FRAUD", "CLEAR"] = Field(description="Your final verdict.")
     evidence_links: List[str] = Field(description="List of ACC-XXXX or ENT-XXXX IDs proving fraud.")
 
+
+# ==========================================
+# OPTIONAL THOUGHT SCRATCHPAD
+# ==========================================
+class ThoughtProcess(BaseModel):
+    observation: str = Field(
+        description="Analyze what just happened and summarize useful clues from the last tool output."
+    )
+    plan: str = Field(
+        description="State the next investigation step and why it follows from the current evidence."
+    )
+    action: str = Field(
+        description="Explain which tool call you are about to make and with which key parameters."
+    )
+
 # The master Action model using Union
 class AmlAction(Action):
+    # Keep this optional so existing inference JSON remains compatible.
+    thought: Optional[ThoughtProcess] = Field(
+        default=None,
+        description="Optional ReAct-style scratchpad for model reasoning.",
+    )
     action: Union[QueryTransactions, SearchTransactions, GetKYCRecord, SubmitDecision] = Field(
         discriminator='action_type'
     )
