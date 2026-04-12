@@ -11,12 +11,13 @@ import textwrap
 from typing import Any, Dict, List, Optional, Tuple
 
 from openai import OpenAI
+from pydantic import ValidationError
 
 from server.AML_env_environment import AmlEnvironment
-from models import AmlAction
+from models import AmlAction, AmlObservation
 
 
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+API_BASE_URL = os.getenv("API_BASE_URL") or "http://127.0.0.1:1234/v1"
 MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-oss-20b")
 HF_TOKEN = os.getenv("HF_TOKEN") or "lm-studio"
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
@@ -26,46 +27,45 @@ TASKS = ["aml_easy", "aml_medium", "aml_hard"]
 BENCHMARK = "aml_investigator"
 MAX_STEPS = 25
 
-OBS_RESULT_MAX_ITEMS = 8
 HISTORY_MAX_STEPS = 3
-HISTORY_MAX_CHARS = 1600
-TEXT_CLIP_CHARS = 320
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
-    You are a Tier 1 AML Compliance Investigator.
-    You must investigate the provided alert by querying the bank's internal APIs.
+    You are a Tier 1 AML compliance investigator using a ReAct-style loop.
+    Think privately, then return exactly one JSON object for the next action.
 
-    You have a strict API budget. Be efficient.
-    Respond with EXACTLY ONE valid JSON object representing your action. Do not include markdown formatting or explanations.
-
-    Available Action JSON Schemas:
-    1. {"action": {"action_type": "query_transactions", "account_id": "ACC-XXXX", "limit": 10, "offset": 0}}
-    2. {"action": {"action_type": "search_transactions", "account_id": "ACC-XXXX", "keyword": "invoice"}}
-    3. {"action": {"action_type": "get_kyc_record", "entity_id": "ENT-XXXX"}}
-    4. {"action": {"action_type": "submit_decision", "decision": "FRAUD", "evidence_links": ["ACC-1234"]}} (Use "CLEAR" for False Positives with empty evidence_links).
-
-    Required top-level JSON format:
+    Output format:
     {
-      "thought": {
-        "observation": "...",
-        "plan": "...",
-        "action": "..."
-      },
-      "action": {...}
+      "thought": "Observation: ... Plan: ...",
+      "action": {
+        "action_type": "...",
+        ...
+      }
     }
 
-    Thought rules:
-    - Use caveman style: short, simple, low-token wording.
-    - Keep thought informative but brief.
-    - observation = what clue found now.
-    - plan = next investigation goal.
-    - action = exact tool call you will make now.
+    The "thought" field is your thinking pad and is required.
+    It must include two labeled sections in order:
+    - Observation: what evidence you see now.
+    - Plan: the single next action and why.
+    Keep it concise.
 
-    Data rules:
-    - get_kyc_record must use ENT-XXXX only, never ACC-XXXX.
-    - submit_decision only when evidence is enough; else keep investigating.
-    - Use only the alert, the current observation, and the recent history shown here.
+    Available actions:
+    - {"action": {"action_type": "query_transactions", "account_id": "ACC-XXXX", "limit": 10, "offset": 0}}
+    - {"action": {"action_type": "search_transactions", "account_id": "ACC-XXXX", "keyword": "invoice"}}
+    - {"action": {"action_type": "get_kyc_record", "entity_id": "ENT-XXXX"}}
+    - {"action": {"action_type": "submit_decision", "decision": "FRAUD", "evidence_links": ["ACC-1234"]}}
+    - For false positives, use {"action": {"action_type": "submit_decision", "decision": "CLEAR", "evidence_links": []}}
+
+    Rules:
+    - Use only the alert, current observation, and recent history shown here.
+    - get_kyc_record must use ENT ids, never ACC ids.
+    - Return JSON only. No markdown fences. No explanation outside JSON.
+
+    Example 1:
+    {"thought":"Observation: The flagged account sent a large payment with a business-like memo. Plan: Check receiver KYC before deciding.","action":{"action_type":"get_kyc_record","entity_id":"ENT-9002"}}
+
+    Example 2:
+    {"thought":"Observation: There are multiple inbound deposits just under 10000 from different accounts. Plan: Inspect one sender's KYC to test structuring.","action":{"action_type":"get_kyc_record","entity_id":"ENT-9011"}}
     """
 ).strip()
 
@@ -156,80 +156,100 @@ def _coerce_json_object(raw_text: str) -> str:
     return text
 
 
-def _clip_text(value: Any, max_chars: int = TEXT_CLIP_CHARS) -> str:
-    text = str(value).replace("\n", " ").strip()
-    if len(text) <= max_chars:
+def _strip_channel_wrappers(raw_text: str) -> str:
+    """
+    Some OSS reasoning models emit channel tags like:
+    <|channel|>analysis<|message|>...<|channel|>final<|message|>{...}
+    Keep only the final/message payload before JSON parsing.
+    """
+    text = raw_text.strip()
+    if "<|channel|>" not in text:
         return text
-    return text[: max_chars - 3] + "..."
+
+    final_marker = "<|channel|>final<|message|>"
+    if final_marker in text:
+        return text.split(final_marker, 1)[1].strip()
+
+    message_marker = "<|message|>"
+    if message_marker in text:
+        return text.split(message_marker, 1)[1].strip()
+
+    return text
 
 
-def _compact_record(record: Dict[str, Any]) -> Dict[str, Any]:
-    keep_keys = [
-        "txn_id",
-        "timestamp",
-        "sender_account",
-        "receiver_account",
-        "amount",
-        "memo_text",
-        "account_id",
-        "owner_entity_id",
-        "status",
-        "entity_id",
-        "name",
-        "type",
-        "registration_address",
-        "directors",
-    ]
-    compact: Dict[str, Any] = {}
-    for key in keep_keys:
-        if key not in record:
-            continue
-        value = record.get(key)
-        if key == "directors" and isinstance(value, list):
-            compact[key] = value[:4]
-            if len(value) > 4:
-                compact["directors_truncated"] = len(value) - 4
-            continue
-        if isinstance(value, str):
-            compact[key] = _clip_text(value, max_chars=180)
-        else:
-            compact[key] = value
-    return compact
-
-
-def _compact_action_result(last_action: Optional[str], value: Any) -> Any:
-    if value is None:
+def _extract_balanced_json_object(text: str) -> Optional[str]:
+    start = text.find("{")
+    if start == -1:
         return None
-    if isinstance(value, list):
-        items = []
-        for item in value[:OBS_RESULT_MAX_ITEMS]:
-            if isinstance(item, dict):
-                items.append(_compact_record(item))
-            else:
-                items.append(_clip_text(item))
-        return {
-            "kind": "list",
-            "count": len(value),
-            "items": items,
-            "truncated": len(value) > OBS_RESULT_MAX_ITEMS,
-            "source_action": last_action,
-        }
-    if isinstance(value, dict):
-        return _compact_record(value)
-    if isinstance(value, str):
-        return _clip_text(value, max_chars=420)
-    return value
+
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1]
+    return None
+
+
+def _parse_action_payload(raw_text: str) -> AmlAction:
+    cleaned_text = _strip_channel_wrappers(raw_text)
+    candidate = _coerce_json_object(cleaned_text)
+    parse_errors: List[str] = []
+
+    for attempt in (
+        candidate,
+        _extract_balanced_json_object(cleaned_text) or "",
+        _extract_balanced_json_object(raw_text) or "",
+    ):
+        if not attempt:
+            continue
+        try:
+            payload = json.loads(attempt)
+            if isinstance(payload, dict):
+                return AmlAction.model_validate(payload)
+            parse_errors.append("decoded JSON was not an object")
+            continue
+        except ValidationError as exc:
+            parse_errors.append(f"schema: {exc.errors()[0]['msg']}")
+            continue
+        except Exception as exc:
+            parse_errors.append(f"json: {exc}")
+
+    details = parse_errors[-1] if parse_errors else "could not parse model output into JSON object"
+    raise ValueError(details)
+
+
+def _debug_text_repr(value: Any) -> str:
+    text = str(value)
+    escaped = text.encode("unicode_escape", errors="backslashreplace").decode("ascii", errors="replace")
+    return f"len={len(text)} repr={escaped!r}"
 
 
 def _build_model_observation(obs_dict: Dict[str, Any]) -> Dict[str, Any]:
+    validated = AmlObservation.model_validate(obs_dict)
     return {
-        "alert_details": obs_dict.get("alert_details"),
-        "budget_remaining": obs_dict.get("budget_remaining"),
-        "last_action": obs_dict.get("last_action"),
-        "last_action_result": _compact_action_result(obs_dict.get("last_action"), obs_dict.get("last_action_result")),
-        "error_message": _clip_text(obs_dict.get("error_message")) if obs_dict.get("error_message") else None,
-        "done": obs_dict.get("done"),
-        "reward": obs_dict.get("reward"),
+        "alert_details": validated.alert_details,
+        "budget_remaining": validated.budget_remaining,
+        "last_action": validated.last_action,
+        "last_action_result": validated.last_action_result,
+        "done": validated.done,
+        "reward": validated.reward,
     }
 
 
@@ -237,9 +257,7 @@ def _render_history(history: List[Dict[str, Any]]) -> str:
     if not history:
         return "No previous steps."
     entries = history[-HISTORY_MAX_STEPS:]
-    lines = [json.dumps(item, ensure_ascii=True, separators=(",", ":")) for item in entries]
-    while lines and len("\n".join(lines)) > HISTORY_MAX_CHARS:
-        lines.pop(0)
+    lines = [json.dumps(item, ensure_ascii=True) for item in entries]
     return "\n".join(lines) if lines else "No previous steps."
 
 
@@ -266,49 +284,6 @@ def _build_recovery_action_from_obs(obs_dict: dict, next_offsets: Dict[str, int]
             "evidence_links": [],
         }
     }
-
-
-def _normalize_thought(payload: Dict[str, Any]) -> None:
-    action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
-    action_type = action.get("action_type", "unknown")
-    if "thought" not in payload or not isinstance(payload.get("thought"), dict):
-        payload["thought"] = {
-            "observation": "see current clue now.",
-            "plan": "find next real link.",
-            "action": f"do {action_type} now.",
-        }
-        return
-
-    thought = payload["thought"]
-    for key, fallback in (
-        ("observation", "see clue now."),
-        ("plan", "next check key link."),
-        ("action", f"do {action_type} now."),
-    ):
-        value = thought.get(key)
-        if not isinstance(value, str) or not value.strip():
-            thought[key] = fallback
-        else:
-            thought[key] = _clip_text(value, max_chars=140)
-
-
-def _try_validate_action_json(raw_text: str) -> Optional[str]:
-    """Return canonical JSON string if valid, else None."""
-    candidate = _coerce_json_object(raw_text)
-    try:
-        payload = json.loads(candidate)
-        if not isinstance(payload, dict):
-            raise ValueError("top-level JSON is not an object")
-        action = payload.get("action")
-        if not isinstance(action, dict):
-            raise ValueError("missing 'action' object")
-        action_type = action.get("action_type")
-        if not isinstance(action_type, str):
-            raise ValueError("missing 'action_type' string")
-        _normalize_thought(payload)
-        return json.dumps(payload, ensure_ascii=True)
-    except Exception:
-        return None
 
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -349,25 +324,9 @@ def get_model_message(
     user_prompt = (
         f"Observation:\n{json.dumps(model_obs, ensure_ascii=True, indent=2)}\n\n"
         f"History:\n{history_block}\n\n"
-        "Return exactly one JSON object with keys: thought, action."
+        "Return exactly one JSON object with keys: thought, action. "
+        "thought must include 'Observation:' and 'Plan:'."
     )
-    parse_errors: List[str] = []
-
-    try:
-        response = client.responses.create(
-            model=MODEL_NAME,
-            instructions=SYSTEM_PROMPT,
-            input=user_prompt,
-            max_output_tokens=700,
-        )
-        raw_text = _extract_text_from_responses_api(response)
-        canonical = _try_validate_action_json(raw_text)
-        if canonical is not None:
-            return canonical, False
-        parse_errors.append("responses:invalid_json")
-    except Exception as responses_exc:
-        parse_errors.append(f"responses:{responses_exc}")
-
     try:
         completion = client.chat.completions.create(
             model=MODEL_NAME,
@@ -376,46 +335,46 @@ def get_model_message(
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.0,
-            max_tokens=700,
+            max_tokens=260,
+            response_format={"type": "json_object"},
         )
-        raw_text = _extract_text_from_chat_completion(completion)
-        canonical = _try_validate_action_json(raw_text)
-        if canonical is not None:
-            return canonical, False
-        parse_errors.append("chat:invalid_json")
+        return _extract_text_from_chat_completion(completion), False
     except Exception as chat_exc:
-        parse_errors.append(f"chat:{chat_exc}")
+        chat_error = f"chat:{chat_exc}"
+
+    try:
+        response = client.responses.create(
+            model=MODEL_NAME,
+            instructions=SYSTEM_PROMPT,
+            input=user_prompt,
+            max_output_tokens=1000,
+        )
+        return _extract_text_from_responses_api(response), False
+    except Exception as responses_exc:
+        responses_error = f"responses:{responses_exc}"
 
     try:
         completion = client.completions.create(
             model=MODEL_NAME,
             prompt=f"{SYSTEM_PROMPT}\n\n{user_prompt}",
             temperature=0.0,
-            max_tokens=280,
+            max_tokens=260,
         )
-        raw_text = _extract_text_from_completions_api(completion)
-        canonical = _try_validate_action_json(raw_text)
-        if canonical is not None:
-            return canonical, False
-        parse_errors.append("completions:invalid_json")
+        return _extract_text_from_completions_api(completion), False
     except Exception as completions_exc:
-        parse_errors.append(f"completions:{completions_exc}")
+        completions_error = f"completions:{completions_exc}"
 
     recovery_json = _build_recovery_action_from_obs(obs_dict, next_offsets)
     print(
         (
-            "[DEBUG] Non-JSON/invalid model action; using recovery action "
-            f"({'; '.join(parse_errors)})"
+            "[DEBUG] Model request failed; using recovery action "
+            f"({completions_error}; {chat_error}; {responses_error})"
         ),
         file=sys.stderr,
         flush=True,
     )
     recovery_payload = {
-        "thought": {
-            "observation": "model output bad json.",
-            "plan": "use safe step. keep investigate.",
-            "action": "query alert account next page.",
-        },
+        "thought": "Observation: Model request failed. Plan: take a safe recovery action.",
         "action": recovery_json["action"],
     }
     return json.dumps(recovery_payload, ensure_ascii=True), True
@@ -433,7 +392,6 @@ async def main() -> None:
         success = False
         had_parse_error = False
         next_offsets: Dict[str, int] = {}
-        query_seen_counts: Dict[Tuple[str, int], int] = {}
 
         log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
@@ -444,60 +402,46 @@ async def main() -> None:
                 if obs.done:
                     break
 
-                obs_dict = obs.model_dump()
+                obs_dict = AmlObservation.model_validate(obs.model_dump()).model_dump()
                 action_str, used_recovery = get_model_message(client, obs_dict, history, next_offsets)
                 if used_recovery:
                     had_parse_error = True
 
                 action_for_log = action_str
                 action_payload_for_history: Dict[str, Any] = {}
+                parsed_model_action = False
+                model_thought_for_history: Optional[str] = None
                 try:
-                    clean_str = _coerce_json_object(action_str)
-                    action_json = json.loads(clean_str)
-                    thought_for_log = action_json.get("thought")
-                    if thought_for_log is None:
-                        action_type = action_json.get("action", {}).get("action_type", "unknown")
-                        thought_for_log = f"do {action_type} now"
-                    log_thought(step=step, thought=thought_for_log)
-                    action_obj = AmlAction.model_validate(action_json)
+                    action_obj = _parse_action_payload(action_str)
+                    log_thought(step=step, thought=action_obj.thought)
+                    model_thought_for_history = action_obj.thought
+                    parsed_model_action = True
 
-                    action_payload_for_history = action_json.get("action", {}) if isinstance(action_json, dict) else {}
+                    action_payload_for_history = action_obj.action.model_dump(exclude={"metadata"}, exclude_none=True)
                     action_for_log = json.dumps({"action": action_payload_for_history}, ensure_ascii=True)
                     if action_payload_for_history.get("action_type") == "query_transactions":
                         acc = action_payload_for_history.get("account_id")
                         offset = int(action_payload_for_history.get("offset", 0))
                         limit = int(action_payload_for_history.get("limit", 10))
                         if isinstance(acc, str):
-                            query_key = (acc, offset)
-                            query_seen_counts[query_key] = query_seen_counts.get(query_key, 0) + 1
-                            # Hard guardrail: avoid wasting budget on repeated same page.
-                            if task_name == "aml_hard" and query_seen_counts[query_key] > 2:
-                                new_offset = max(next_offsets.get(acc, offset + max(limit, 1)), offset + max(limit, 1))
-                                action_json["action"]["offset"] = new_offset
-                                action_json["thought"]["plan"] = _clip_text(
-                                    f"repeat page seen. move to next offset {new_offset}.",
-                                    max_chars=120,
-                                )
-                                action_json["thought"]["action"] = _clip_text(
-                                    f"query_transactions {acc} offset {new_offset}",
-                                    max_chars=120,
-                                )
-                                action_for_log = json.dumps(action_json, ensure_ascii=True)
-                                action_obj = AmlAction.model_validate(action_json)
-                                offset = new_offset
                             next_offsets[acc] = max(next_offsets.get(acc, 0), offset + max(limit, 1))
                     error = None
                 except Exception as e:
                     had_parse_error = True
                     error = f"JSON Parse/Schema Error: {str(e)}"
-                    log_thought(step=step, thought="parse fail; use recovery action")
+                    debug_payload = _debug_text_repr(action_str) if action_str.strip() else "empty model output"
+                    print(
+                        f"[DEBUG] step={step} parse_failed_raw={debug_payload}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    log_thought(
+                        step=step,
+                        thought="Observation: model output was invalid. Plan: use safe recovery action.",
+                    )
                     recovery_json = _build_recovery_action_from_obs(obs_dict, next_offsets)
                     recovery_payload = {
-                        "thought": {
-                            "observation": "parse fail now.",
-                            "plan": "safe step, keep digging.",
-                            "action": "query alert next page.",
-                        },
+                        "thought": "Observation: JSON/schema parse failed. Plan: query next page safely.",
                         "action": recovery_json["action"],
                     }
                     action_obj = AmlAction.model_validate(recovery_payload)
@@ -513,17 +457,19 @@ async def main() -> None:
                 steps_taken = step
 
                 log_step(step=step, action=action_for_log.replace("\n", ""), reward=reward, done=done, error=error)
-                history.append(
-                    {
-                        "step": step,
-                        "action": action_payload_for_history,
-                        "result": _compact_action_result(obs.last_action, obs.last_action_result),
-                        "error": _clip_text(obs.error_message) if obs.error_message else None,
-                        "budget_remaining": obs.budget_remaining,
-                    }
-                )
-                if len(history) > 24:
-                    history = history[-24:]
+                # Keep prompt context clean: only feed back model-authored, schema-valid turns.
+                if parsed_model_action:
+                    history.append(
+                        {
+                            "step": step,
+                            "thought": model_thought_for_history,
+                            "action": action_payload_for_history,
+                            "result": obs.last_action_result,
+                            "budget_remaining": obs.budget_remaining,
+                        }
+                    )
+                    if len(history) > HISTORY_MAX_STEPS:
+                        history = history[-HISTORY_MAX_STEPS:]
 
                 if done:
                     break

@@ -11,13 +11,15 @@ The AML_env environment is a simple test environment that echoes back messages.
 """
 
 from openenv.core.env_server.types import Action, Observation
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, Field, field_validator
 from typing import List, Literal, Optional, Any, Union
 
 # ==========================================
 # OBSERVATION SPACE
 # ==========================================
 class AmlObservation(Observation):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     alert_details: str = Field(description="The constant mission objective and initial alert.")
     budget_remaining: int = Field(description="API calls remaining.")
     last_action: Optional[str] = Field(default=None, description="Last tool used.")
@@ -28,48 +30,53 @@ class AmlObservation(Observation):
 # ACTION SPACE
 # ==========================================
 class QueryTransactions(Action):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     action_type: Literal["query_transactions"]
-    account_id: str = Field(description="The exact ACC-XXXX ID to query.")
-    limit: int = Field(default=10, description="Max transactions to return.")
-    offset: int = Field(default=0, description="Offset for pagination.")
+    account_id: str = Field(pattern=r"^ACC-\d{4}$", description="The exact ACC-XXXX ID to query.")
+    limit: int = Field(default=10, ge=1, le=100, description="Max transactions to return.")
+    offset: int = Field(default=0, ge=0, description="Offset for pagination.")
 
 class SearchTransactions(Action):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     action_type: Literal["search_transactions"]
-    account_id: str = Field(description="The exact ACC-XXXX ID to query.")
-    keyword: str = Field(description="Keyword to search in memo_text.")
+    account_id: str = Field(pattern=r"^ACC-\d{4}$", description="The exact ACC-XXXX ID to query.")
+    keyword: str = Field(min_length=1, description="Keyword to search in memo_text.")
 
 class GetKYCRecord(Action):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     action_type: Literal["get_kyc_record"]
-    entity_id: str = Field(description="The exact ENT-XXXX ID to look up.")
+    entity_id: str = Field(pattern=r"^ENT-\d{4}$", description="The exact ENT-XXXX ID to look up.")
 
 class SubmitDecision(Action):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     action_type: Literal["submit_decision"]
     decision: Literal["FRAUD", "CLEAR"] = Field(description="Your final verdict.")
-    evidence_links: List[str] = Field(description="List of ACC-XXXX or ENT-XXXX IDs proving fraud.")
-
-
-# ==========================================
-# OPTIONAL THOUGHT SCRATCHPAD
-# ==========================================
-class ThoughtProcess(BaseModel):
-    observation: str = Field(
-        description="Analyze what just happened and summarize useful clues from the last tool output."
-    )
-    plan: str = Field(
-        description="State the next investigation step and why it follows from the current evidence."
-    )
-    action: str = Field(
-        description="Explain which tool call you are about to make and with which key parameters."
+    evidence_links: List[str] = Field(
+        default_factory=list,
+        description="List of ACC-XXXX or ENT-XXXX IDs proving fraud.",
     )
 
 # The master Action model using Union
 class AmlAction(Action):
-    # Keep this optional so existing inference JSON remains compatible.
-    thought: Optional[ThoughtProcess] = Field(
-        default=None,
-        description="Optional ReAct-style scratchpad for model reasoning.",
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    thought: str = Field(
+        min_length=1,
+        description="Short thinking pad with Observation: and Plan: sections.",
     )
     action: Union[QueryTransactions, SearchTransactions, GetKYCRecord, SubmitDecision] = Field(
         discriminator='action_type'
     )
-    
+
+    @field_validator("thought")
+    @classmethod
+    def thought_must_include_sections(cls, value: str) -> str:
+        text = value.strip()
+        lower_text = text.lower()
+        if "observation:" not in lower_text or "plan:" not in lower_text:
+            raise ValueError("thought must include 'Observation:' and 'Plan:' sections")
+        return text
